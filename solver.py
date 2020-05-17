@@ -274,7 +274,7 @@ def attempt_dd_improvement(main_tour, best_length, other_tour, other_length):
     # There may be cases where naive gain is more than decomposed gains:
     # decomposed gains currently only return moves that can be independently performed.
     # Infeasible moves that are improvements but only can be combined with other moves to become feasible
-    # (a potentially computationally expensive search) wil be excluded from the decomposed moves.
+    # (a potentially computationally expensive search) will be excluded from the decomposed moves.
     dd_gain = 0 # gain due to decomposed kmoves.
     if kmoves:
         for k in kmoves:
@@ -306,9 +306,10 @@ def group_hill_climb(xy):
             better_branch, better_branch_length = attempt_dd_improvement(branch, branch_length, test_branch, test_length)
             if better_branch_length < branch_length:
                 branches[i] = better_branch, better_branch_length
+                print('branch improved to {} from {}'.format(better_branch_length, branch_length))
                 tour, best_length = attempt_dd_improvement(tour, best_length, better_branch, better_branch_length)
         rounds += 1
-        print('\nbest_length: {}\nround {}\n'.format(best_length, rounds))
+        print('\nbest_length: {}\nround {}\nbest branch length: {}\n'.format(best_length, rounds, min([x[1] for x in branches])))
 
 if __name__ == "__main__":
     problem_name = 'xqf131'

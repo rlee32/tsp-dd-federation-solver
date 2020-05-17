@@ -30,5 +30,4 @@ def optimize(xy, tour):
         new_tour, improvement = improve(xy, new_tour)
         total_improvement += improvement
     new_length = tour_util.length(xy, new_tour)
-    print('optimized length: {}'.format(new_length))
     return new_tour, new_length
