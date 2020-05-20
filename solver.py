@@ -229,6 +229,9 @@ def segments_to_beneficial_kmoves(xy, segments, tour):
     """segments are all segments that completely describe the difference between 2 local optima.
     Returns a list of tuples with format (gain, beneficial kmove).
     Note that independent k-moves when combined can become non-feasible (cycle-breaking).
+    feasible 0-cost moves are thrown away.
+    non-feasible moves are combined together and then thrown away if non-feasible or 0-cost.
+    also returns harmful (negative-gain) kmoves.
     """
     total_adds = sum([len(x['adds']) for x in segments])
     total_dels = sum([len(x['dels']) for x in segments])
@@ -236,60 +239,88 @@ def segments_to_beneficial_kmoves(xy, segments, tour):
     kmoves = segments_to_kmoves(segments)
     non_feasible_kmoves = [] # tuple (gain, kmove)
     beneficial_kmoves = []
+    harmful_kmoves = []
+    naive_gain = 0
     for k in kmoves:
         total_adds -= len(k['adds'])
         total_dels -= len(k['dels'])
         feasible = is_feasible(tour, k)
         gain = kmove_gain(xy, k)
+        naive_gain += gain
         if feasible:
             if gain > 0:
                 #print('        {}-opt move with gain {}'.format(len(k['dels']), gain))
                 beneficial_kmoves.append((gain, k))
+            elif gain < 0:
+                harmful_kmoves.append((gain, k))
         else:
             non_feasible_kmoves.append((gain, k))
     assert(total_adds == 0)
     assert(total_dels == 0)
     if non_feasible_kmoves:
         gain = sum([x[0] for x in non_feasible_kmoves])
-        if gain > 0:
-            kmove_from_nonfeasible = combine_segment_array([x[1] for x in non_feasible_kmoves])
-            # need to check feasibility. It might make sense that independent k-moves should be independent from all non-feasible moves,
-            # but consider this example: a non-sequential 4-opt move consisting of 2 2-opt moves, one of which creates 2 cycles, and
-            # the other joining the 2 cycles. The joining move alone can either create 2 cycles or not (an independent k-move) in order
-            # for the 4-opt move to be feasible. This means the first 2-opt move will be non-feasible alone, while the 2nd 2-opt move
-            # can either be non-feasible or feasible, meaning the 4-opt move can have either only 1 non-feasible moves or 2.
-            if is_feasible(tour, kmove_from_nonfeasible):
-                #print('        total gain for {} non-feasible moves: {}'.format(len(non_feasible_kmoves), gain))
+        kmove_from_nonfeasible = combine_segment_array([x[1] for x in non_feasible_kmoves])
+        # need to check feasibility. It might make sense that independent k-moves should be independent from all non-feasible moves,
+        # but consider this example: a non-sequential 4-opt move consisting of 2 2-opt moves, one of which creates 2 cycles, and
+        # the other joining the 2 cycles. The joining move alone can either create 2 cycles or not (an independent k-move) in order
+        # for the 4-opt move to be feasible. This means the first 2-opt move will be non-feasible alone, while the 2nd 2-opt move
+        # can either be non-feasible or feasible, meaning the 4-opt move can have either only 1 non-feasible moves or 2.
+        if is_feasible(tour, kmove_from_nonfeasible):
+            #print('        total gain for {} non-feasible moves: {}'.format(len(non_feasible_kmoves), gain))
+            if gain > 0:
                 beneficial_kmoves.append((gain, kmove_from_nonfeasible))
+            elif gain < 0:
+                harmful_kmoves.append((gain, kmove_from_nonfeasible))
     beneficial_kmoves.sort(key = lambda x: x[0], reverse = True)
-    return beneficial_kmoves
+    harmful_kmoves.sort(key = lambda x: x[0])
+    return beneficial_kmoves, harmful_kmoves
 
 def attempt_dd_improvement(main_tour, best_length, other_tour, other_length):
     segments = Splitter(main_tour, other_tour).get_segments()
-    kmoves = segments_to_beneficial_kmoves(xy, segments, main_tour)
-    max_gain = 0
-    if kmoves:
-        max_gain = sum([k[0] for k in kmoves])
+    positive_kmoves, negative_kmoves = segments_to_beneficial_kmoves(xy, segments, main_tour)
+    # Now that we have independent kmoves, it can be very expensive to try all possible combinations.
+    # So for efficiency's sake we try high-yield (supposedly) simple combinations:
+    # 1. Try all beneficial kmoves at once. Quit if succeeds (cannot get better).
+    # 2. Try each beneficial kmove sequentially, starting from highest-gain.
+    # 3. Exclude negative k-moves sequentially, starting from highest-loss.
     naive_gain = best_length - other_length
-    # There may be cases where naive gain is more than decomposed gains:
-    # decomposed gains currently only return moves that can be independently performed.
-    # Infeasible moves that are improvements but only can be combined with other moves to become feasible
-    # (a potentially computationally expensive search) will be excluded from the decomposed moves.
-    dd_gain = 0 # gain due to decomposed kmoves.
-    if kmoves:
-        for k in kmoves:
+    if positive_kmoves:
+        max_positive_gain = sum([x[0] for x in positive_kmoves])
+        if max_positive_gain < naive_gain:
+            print('MAX POSITIVE GAIN < NAIVE GAIN')
+            main_tour = other_tour
+            best_length = other_length
+            return main_tour, best_length
+        all_positive = combine_segment_array([x[1] for x in positive_kmoves])
+        test_tour = perform_kmove(main_tour, all_positive)
+        if len(test_tour) == len(main_tour):
+            main_tour = test_tour
+            print('Trying all {} positive kmoves together worked; gain: {} (naive gain: {})'.format(len(positive_kmoves), max_positive_gain, naive_gain))
+            assert(max_positive_gain >= naive_gain)
+            assert(max_positive_gain > 0)
+            return main_tour, best_length - max_positive_gain
+        # There may be cases where naive gain is more than decomposed gains:
+        # decomposed gains currently only return moves that can be independently performed.
+        # Infeasible moves that are improvements but only can be combined with other moves to become feasible
+        # (a potentially computationally expensive search) will be excluded from the decomposed moves.
+        dd_gain = 0 # gain due to decomposed kmoves.
+        for k in positive_kmoves:
             print('    trying {}-opt move with gain {}'.format(len(k[1]['adds']), k[0]))
             test_tour = perform_kmove(main_tour, k[1])
             if len(test_tour) == len(main_tour):
                 main_tour = test_tour
                 best_length -= k[0]
                 dd_gain += k[0]
-    if naive_gain > dd_gain:
-        print('naive_gain ({}) greater than dd_gain ({})'.format(naive_gain, dd_gain))
-        main_tour = other_tour
-        best_length = other_length
-    if dd_gain > 0 and dd_gain > naive_gain:
-        print('    dd gain {} greater than naive gain {}'.format(dd_gain, naive_gain))
+        if naive_gain > dd_gain:
+            print('naive_gain ({}) greater than dd_gain ({})'.format(naive_gain, dd_gain))
+            main_tour = other_tour
+            best_length = other_length
+        if dd_gain > 0 and dd_gain > naive_gain:
+            print('    dd gain {} greater than naive gain {}'.format(dd_gain, naive_gain))
+    elif naive_gain > 0:
+            print('NAIVE GAIN > 0 WITH NO DD POSITIVE GAIN')
+            main_tour = other_tour
+            best_length = other_length
     return main_tour, best_length
 
 def group_hill_climb(xy):
